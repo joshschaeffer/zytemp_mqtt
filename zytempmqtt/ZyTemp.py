@@ -2,7 +2,7 @@
 
 import os
 import logging as log
-import hid
+from . import hid
 from .config import ConfigFile
 
 CO2_USB_MFG = 'Holtek'
