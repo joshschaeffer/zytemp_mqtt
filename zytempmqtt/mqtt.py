@@ -6,6 +6,12 @@ from .config import ConfigFile
 
 l = log.getLogger('mqtt')
 
+# Bounds for paho's exponential reconnect backoff. Its own default cap is 120s,
+# which is a long time to be silent on a device that may well have booted before
+# the broker did.
+RECONNECT_MIN_DELAY = 1
+RECONNECT_MAX_DELAY = 60
+
 
 class MqttClient:
     def __init__(self):
@@ -14,7 +20,27 @@ class MqttClient:
         # Incremented on every successful connect, so users of this client can
         # tell a fresh session apart from the previous one and re-publish
         # anything the broker may have lost (e.g. retained messages).
+        # Written by paho's network thread, read by the main thread.
         self.connect_count = 0
+
+    def _new_client(self):
+        # paho-mqtt 2.x requires an explicit callback API version; 1.x has no
+        # such argument. The callbacks below use the v1 signatures.
+        if hasattr(mqtt, 'CallbackAPIVersion'):
+            client = mqtt.Client(
+                mqtt.CallbackAPIVersion.VERSION1,
+                client_id=self.cfg.mqtt_client_id)
+        else:
+            client = mqtt.Client(client_id=self.cfg.mqtt_client_id)
+        client.on_connect = self.on_connect
+        client.on_disconnect = self.on_disconnect
+        client.username_pw_set(
+            self.cfg.mqtt_username, self.cfg.mqtt_password)
+        client.reconnect_delay_set(
+            min_delay=RECONNECT_MIN_DELAY, max_delay=RECONNECT_MAX_DELAY)
+        return client
+
+    # Both callbacks below run on paho's network thread, not the main one.
 
     def on_connect(self, client, userdata, flags, rc):
         if rc == 0:
@@ -28,27 +54,47 @@ class MqttClient:
         l.log(log.WARN, f'disconnected from {self.cfg.mqtt_host}: {rc}')
 
     def connect(self):
-        # paho-mqtt 2.x requires an explicit callback API version; 1.x has no
-        # such argument. The callbacks below use the v1 signatures.
-        if hasattr(mqtt, 'CallbackAPIVersion'):
-            self.client = mqtt.Client(
-                mqtt.CallbackAPIVersion.VERSION1,
-                client_id=self.cfg.mqtt_client_id)
-        else:
-            self.client = mqtt.Client(client_id=self.cfg.mqtt_client_id)
-        self.client.on_connect = self.on_connect
-        self.client.on_disconnect = self.on_disconnect
-        self.client.username_pw_set(
-            self.cfg.mqtt_username, self.cfg.mqtt_password)
+        """Start connecting to the broker in the background.
+
+        Returns immediately: the name lookup, the TCP connect and every
+        subsequent retry happen on paho's network thread, so a broker that is
+        down or unreachable never holds up the sensor read loop.
+        """
+        if self.client is not None:
+            return True
+
+        client = self._new_client()
         try:
-            self.client.connect(
-                self.cfg.mqtt_host, self.cfg.mqtt_port)
-        except Exception as e:
-            l.log(log.ERROR, f'connection to {self.cfg.mqtt_host} failed: {e}')
+            client.connect_async(self.cfg.mqtt_host, self.cfg.mqtt_port)
+        except (ValueError, TypeError) as e:
+            # An unusable host or port from the config file. There is nothing
+            # to retry, and paho's network loop only handles OSError, so this
+            # would otherwise kill the thread silently. Don't start it at all.
+            l.log(log.ERROR, f'cannot connect to {self.cfg.mqtt_host}: {e}')
+            return False
+
+        self.client = client
+        client.loop_start()
+        l.log(log.INFO,
+              f'connecting to {self.cfg.mqtt_host}:{self.cfg.mqtt_port}')
+        return True
 
     def disconnect(self):
-        if self.client is not None and self.client.is_connected():
-            self.client.disconnect()
+        client, self.client = self.client, None
+        if client is None:
+            return
+
+        connected = client.is_connected()
+        # Also takes the client out of the reconnect loop when it never got
+        # connected in the first place, so the network thread stops retrying.
+        client.disconnect()
+        if connected:
+            # Wait for the network thread so the DISCONNECT reaches the wire.
+            # Only safe when we were connected: otherwise the thread may be
+            # blocked in a name lookup or a TCP connect, and loop_stop() joins
+            # without a timeout. It is a daemon thread that has already been
+            # told to stop, so leaving it is harmless.
+            client.loop_stop()
 
     def publish(self, topic, pkt, retain=False):
         def round_floats(o):
@@ -65,9 +111,3 @@ class MqttClient:
             return (mi.rc == mqtt.MQTT_ERR_SUCCESS)
         else:
             return False
-
-    def run(self, to):
-        if self.client is None or not self.client.is_connected():
-            self.connect()
-
-        self.client.loop(timeout=to)

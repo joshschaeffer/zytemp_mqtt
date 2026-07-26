@@ -68,15 +68,40 @@ class ZyTemp():
     """ MQTT Discovery for Home Assistant """
 
     def discovery(self):
-        if not len(self.cfg.discovery_prefix):
+        """Announce ourselves again whenever a new connection is established.
+
+        The broker is usually restarted together with Home Assistant, and
+        unless it persists retained messages both the discovery config and the
+        last reading are lost - leaving the entities unavailable until they
+        are published again.
+        """
+        # Sample the counter once. It is incremented on paho's network thread,
+        # so it can change while we are publishing; comparing and storing the
+        # same value stops a reconnect that lands midway through from being
+        # recorded as already announced.
+        session = self.m.connect_count
+
+        if self.discovered_connection == session:
             return
 
-        # Re-publish on every new connection: the broker is often restarted
-        # together with Home Assistant, and unless it persists retained
-        # messages the discovery config is lost - leaving the entities
-        # unavailable until they are announced again.
-        if self.discovered_connection == self.m.connect_count:
+        if not self._publish_discovery_config():
+            l.log(
+                log.INFO, f'MQTT discovery to {self.cfg.mqtt_host} failed - retrying')
             return
+
+        self.discovered_connection = session
+        # update() only publishes on change, so without this the entities
+        # would stay empty until a value happened to move.
+        self.publish_state()
+
+    def _publish_discovery_config(self):
+        """Publish the Home Assistant discovery config.
+
+        Returns whether the announcement succeeded; discovery being switched
+        off counts as success, so the state below is still re-published.
+        """
+        if not len(self.cfg.discovery_prefix):
+            return True
 
         res = []
         for meas in ZyTemp.MEASUREMENTS.values():
@@ -107,19 +132,11 @@ class ZyTemp():
             )
             res.append(res_val)
 
-        if all(res):
-            l.log(
-                log.INFO, f'MQTT discovery published to {self.cfg.mqtt_host}')
-            self.discovered_connection = self.m.connect_count
-            # Re-announce the current readings as well: update() only
-            # publishes on change, so without this the entities would stay
-            # empty until a value happens to change.
-            self.publish_state()
-        else:
-            l.log(
-                log.INFO, f'MQTT discovery to {self.cfg.mqtt_host} failed - retrying')
+        if not all(res):
+            return False
 
-        self.m.run(0.1)
+        l.log(log.INFO, f'MQTT discovery published to {self.cfg.mqtt_host}')
+        return True
 
     def publish_state(self):
         if any(v is None for v in self.values.values()):
@@ -187,7 +204,6 @@ class ZyTemp():
 
             if not ignore:
                 self.update(m_name, m_reading)
-            self.m.run(0.1)
 
             if m_name == 'CO2' and self.measurements_to_ignore:
                 self.measurements_to_ignore -= 1

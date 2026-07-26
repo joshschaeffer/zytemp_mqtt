@@ -24,6 +24,10 @@ def main():
     log.log(log.INFO, f'zytempmqtt version {__version__}')
 
     signal.signal(signal.SIGINT, signal_handler)
+    # systemd stops services with SIGTERM, whose default action kills the
+    # process outright - so without this nothing below ever runs on shutdown
+    # and the broker only sees the socket drop.
+    signal.signal(signal.SIGTERM, signal_handler)
 
     mqtt = MqttClient()
     mqtt.connect()
@@ -38,9 +42,10 @@ def main():
             zt.run()
             time.sleep(5)
 
-    except SystemExit as e:
-        mqtt.disconnect()
+    except SystemExit:
         log.log(log.INFO, 'Terminated')
+    finally:
+        mqtt.disconnect()
 
 
 if __name__ == '__main__':
