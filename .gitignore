@@ -1,3 +1,25 @@
 /*.egg-info
 *.pyc
+__pycache__/
 /.vscode
+/.idea
+
+# Python build artifacts
+/dist
+/build
+
+# OpenWrt SDK and package build leftovers
+/openwrt-sdk-*
+/apk-*
+/ipkg-*
+/.pkgdir
+/.built
+/.built_check
+/.configured_*
+/.prepared
+/.quilt_checked
+/.source_dir
+*.tar.zst
+
+# aider
+/.aider*

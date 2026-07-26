@@ -1,0 +1,11 @@
+# The service is deployed on Linux; these must keep LF endings even when the
+# repo is checked out or copied from a Windows working tree, or the shell
+# script, systemd unit and udev rule it writes will fail to parse.
+* text=auto
+
+*.sh    text eol=lf
+*.py    text eol=lf
+*.yaml  text eol=lf
+*.rules text eol=lf
+
+*.png binary
