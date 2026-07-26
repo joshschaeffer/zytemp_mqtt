@@ -14,7 +14,8 @@ import pytest
 import zytempmqtt.mqtt as zm
 from zytempmqtt.mqtt import MqttClient
 
-from mini_broker import RefusingBroker, RejectingBroker
+from mini_broker import (MiniBroker, RefusingBroker, RejectingBroker,
+                         SilentBroker)
 from conftest import wait_until
 
 # Generous: the behaviour being guarded took seconds, so anything sub-second
@@ -162,6 +163,71 @@ def test_unreachable_broker_says_so(cfg, caplog):
             'an unreachable broker must not look like a rejected login')
     finally:
         client.disconnect()
+
+
+def test_recovers_from_a_connection_that_dies_silently(cfg, monkeypatch):
+    """The reported failure: the connection was lost and never came back.
+
+    A link can die with no FIN and no reset - a vanished host, a reshuffled
+    container network - leaving a socket that looks healthy while everything
+    published into it is discarded. Only an unanswered keepalive reveals it,
+    so anything that decides it is connected by remembering a past callback
+    stays wrong forever. Nothing here closes a socket; that is the point.
+    """
+    monkeypatch.setattr(zm, 'KEEPALIVE', 2, raising=False)
+
+    broker = SilentBroker().start()
+    cfg.mqtt_port = broker.port
+    client = MqttClient()
+    client.connect()
+
+    try:
+        assert wait_until(lambda: client.connect_count == 1, timeout=10.0), (
+            'never established the first connection')
+
+        # The broker is now mute. Nothing signals this; the client has to
+        # work it out from the keepalive going unanswered and start again.
+        assert wait_until(lambda: client.connect_count >= 2, timeout=25.0), (
+            'the dead connection was never noticed - the client believed it '
+            'was still connected and would publish into a void indefinitely')
+
+        assert broker.accepts >= 2, (
+            'no reconnection was attempted')
+    finally:
+        client.disconnect()
+        broker.stop()
+
+
+def test_connection_survives_a_silent_sensor(cfg, monkeypatch):
+    """MQTT liveness must not depend on the sensor producing readings.
+
+    The client used to be serviced only after each HID read, and that read
+    blocks with no timeout. An unplugged or wedged sensor therefore stopped
+    the keepalive as well, and the connection died unnoticed with nothing
+    left running to rebuild it. Nothing touches the client here for several
+    keepalive periods, exactly as if no reading had arrived.
+    """
+    monkeypatch.setattr(zm, 'KEEPALIVE', 2, raising=False)
+
+    broker = MiniBroker().start()
+    cfg.mqtt_port = broker.port
+    client = MqttClient()
+    client.connect()
+
+    try:
+        assert wait_until(lambda: client.connect_count == 1, timeout=10.0)
+
+        time.sleep(6)          # several keepalives, no calls into the client
+
+        assert client.is_connected(), (
+            'the connection lapsed while no readings were arriving')
+        assert client.publish('zytemp-mqtt', {'CO2': 800}), (
+            'publishing failed after a quiet period')
+        assert client.connect_count == 1, (
+            'the connection dropped and was rebuilt rather than being kept')
+    finally:
+        client.disconnect()
+        broker.stop()
 
 
 def test_disconnect_is_prompt_and_idempotent(cfg):

@@ -12,6 +12,12 @@ l = log.getLogger('mqtt')
 RECONNECT_MIN_DELAY = 1
 RECONNECT_MAX_DELAY = 60
 
+# How long a silent connection is allowed to look healthy. A link can die
+# without either end noticing - no FIN, just nothing - and until a ping goes
+# unanswered the socket appears perfectly fine while everything published into
+# it is discarded.
+KEEPALIVE = 30
+
 
 class MqttClient:
     def __init__(self):
@@ -81,7 +87,8 @@ class MqttClient:
 
         client = self._new_client()
         try:
-            client.connect_async(self.cfg.mqtt_host, self.cfg.mqtt_port)
+            client.connect_async(self.cfg.mqtt_host, self.cfg.mqtt_port,
+                                 keepalive=KEEPALIVE)
         except (ValueError, TypeError) as e:
             # An unusable host or port from the config file. There is nothing
             # to retry, and paho's network loop only handles OSError, so this
