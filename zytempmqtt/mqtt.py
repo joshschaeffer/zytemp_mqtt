@@ -10,22 +10,32 @@ l = log.getLogger('mqtt')
 class MqttClient:
     def __init__(self):
         self.cfg = ConfigFile()
-        self.connected = False
+        self.client = None
+        # Incremented on every successful connect, so users of this client can
+        # tell a fresh session apart from the previous one and re-publish
+        # anything the broker may have lost (e.g. retained messages).
+        self.connect_count = 0
 
     def on_connect(self, client, userdata, flags, rc):
-        self.connected = (rc == 0)
         if rc == 0:
+            self.connect_count += 1
             l.log(log.INFO, f'connected to {self.cfg.mqtt_host}')
         else:
             l.log(log.ERROR,
                   f'connection to {self.cfg.mqtt_host} failed: {rc}')
 
     def on_disconnect(self, client, userdata, rc):
-        self.connected = False
         l.log(log.WARN, f'disconnected from {self.cfg.mqtt_host}: {rc}')
 
     def connect(self):
-        self.client = mqtt.Client(client_id=self.cfg.mqtt_client_id)
+        # paho-mqtt 2.x requires an explicit callback API version; 1.x has no
+        # such argument. The callbacks below use the v1 signatures.
+        if hasattr(mqtt, 'CallbackAPIVersion'):
+            self.client = mqtt.Client(
+                mqtt.CallbackAPIVersion.VERSION1,
+                client_id=self.cfg.mqtt_client_id)
+        else:
+            self.client = mqtt.Client(client_id=self.cfg.mqtt_client_id)
         self.client.on_connect = self.on_connect
         self.client.on_disconnect = self.on_disconnect
         self.client.username_pw_set(
@@ -37,7 +47,7 @@ class MqttClient:
             l.log(log.ERROR, f'connection to {self.cfg.mqtt_host} failed: {e}')
 
     def disconnect(self):
-        if self.connected:
+        if self.client is not None and self.client.is_connected():
             self.client.disconnect()
 
     def publish(self, topic, pkt, retain=False):
@@ -49,7 +59,7 @@ class MqttClient:
             if isinstance(o, (list, tuple)):
                 return [round_floats(x) for x in o]
             return o
-        if self.connected:
+        if self.client is not None and self.client.is_connected():
             mi = self.client.publish(topic, json.dumps(
                 round_floats(pkt)), retain=retain)
             return (mi.rc == mqtt.MQTT_ERR_SUCCESS)
@@ -57,7 +67,7 @@ class MqttClient:
             return False
 
     def run(self, to):
-        if not self.connected:
+        if self.client is None or not self.client.is_connected():
             self.connect()
 
         self.client.loop(timeout=to)

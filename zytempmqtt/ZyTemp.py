@@ -50,7 +50,7 @@ class ZyTemp():
         self.h = hiddev
         self.measurements_to_ignore = IGNORE_N_MEASUREMENTS
         self.values = {v['name']: None for v in ZyTemp.MEASUREMENTS.values()}
-        self.discover_published = False
+        self.discovered_connection = None
 
         self._magic_word = [((w << 4) & 0xFF) | (w >> 4)
                             for w in bytearray(_CO2MON_MAGIC_WORD)]
@@ -71,7 +71,11 @@ class ZyTemp():
         if not len(self.cfg.discovery_prefix):
             return
 
-        if self.discover_published:
+        # Re-publish on every new connection: the broker is often restarted
+        # together with Home Assistant, and unless it persists retained
+        # messages the discovery config is lost - leaving the entities
+        # unavailable until they are announced again.
+        if self.discovered_connection == self.m.connect_count:
             return
 
         res = []
@@ -106,23 +110,29 @@ class ZyTemp():
         if all(res):
             l.log(
                 log.INFO, f'MQTT discovery published to {self.cfg.mqtt_host}')
-            self.discover_published = True
+            self.discovered_connection = self.m.connect_count
+            # Re-announce the current readings as well: update() only
+            # publishes on change, so without this the entities would stay
+            # empty until a value happens to change.
+            self.publish_state()
         else:
             l.log(
                 log.INFO, f'MQTT discovery to {self.cfg.mqtt_host} failed - retrying')
 
         self.m.run(0.1)
 
+    def publish_state(self):
+        if any(v is None for v in self.values.values()):
+            return
+
+        self.m.publish(self.cfg.mqtt_topic, self.values, retain=True)
+
     def update(self, key, value):
         if self.values[key] == value:
             return
 
         self.values[key] = value
-
-        if any(v is None for v in self.values.values()):
-            return
-
-        self.m.publish(self.cfg.mqtt_topic, self.values)
+        self.publish_state()
 
     def run(self):
         while True:

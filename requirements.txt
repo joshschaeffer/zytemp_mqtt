@@ -1,2 +1,4 @@
-paho-mqtt
+# The code uses the v1 callback API, which works on both paho-mqtt 1.x
+# (shipped by most distros) and 2.x, but is slated for removal in 3.x.
+paho-mqtt<3
 PyYAML>=5.1.0
