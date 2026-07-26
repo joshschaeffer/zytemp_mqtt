@@ -97,7 +97,10 @@ WantedBy=multi-user.target
 EOF
 
 systemctl daemon-reload
-systemctl enable --now ${SRVNAME}
+systemctl enable ${SRVNAME}
+# restart rather than start: an already-running service would otherwise keep
+# executing the code that was in place before the copy above.
+systemctl restart ${SRVNAME}
 
 echo
 echo "${SRVNAME} is enabled and running. Check it with:"

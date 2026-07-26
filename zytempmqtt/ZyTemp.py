@@ -210,8 +210,9 @@ class ZyTemp():
 
 
 def get_hiddev():
+    devices = hid.enumerate()
     hid_sensors = [
-        e for e in hid.enumerate()
+        e for e in devices
         if e['manufacturer_string'] == CO2_USB_MFG
         and e['product_string'] == CO2_USB_PRD
     ]
@@ -228,10 +229,16 @@ def get_hiddev():
         p.append(path)
 
     if not p:
-        l.log(log.ERROR, 'No device found')
+        # Name the backend: it is entirely possible for the sensor to be
+        # plugged in and enumerating over USB while the hidapi build in use
+        # cannot see it at all, and that is otherwise invisible from here.
+        l.log(log.ERROR,
+              f'No device found - {hid.backend_name()} lists '
+              f'{len(devices)} HID device(s)')
         return None
 
-    l.log(log.INFO, f'Using device at {p[0].decode("utf-8")}')
+    l.log(log.INFO, f'Using device at {p[0].decode("utf-8")} '
+                    f'via {hid.backend_name()}')
     h = hid.device()
     h.open_path(p[0])
     return h

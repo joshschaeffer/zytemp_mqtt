@@ -13,6 +13,7 @@ if 'zytempmqtt.hid' not in sys.modules:
     _stub = types.ModuleType('zytempmqtt.hid')
     _stub.enumerate = lambda *a, **k: []
     _stub.device = object
+    _stub.backend_name = lambda: 'stub'
     sys.modules['zytempmqtt.hid'] = _stub
 
 from zytempmqtt.config import ConfigFile      # noqa: E402

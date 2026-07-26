@@ -129,6 +129,15 @@ if _lib is None:
         'or libhidapi-libusb0 (package name varies by distro)')
 
 
+def backend_name():
+    """Which hidapi build ended up being used.
+
+    Worth reporting: when no device turns up, the backend in use is the
+    first thing you want to know.
+    """
+    return getattr(_lib, '_name', None) or 'hidapi'
+
+
 def enumerate(vendor_id=0, product_id=0):
     devs = _lib.hid_enumerate(vendor_id, product_id)
     result = []

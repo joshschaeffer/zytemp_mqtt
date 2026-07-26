@@ -54,6 +54,7 @@ class FakeLib:
     """Enough of the hidapi surface for import-time setup to succeed."""
 
     def __init__(self, name, devices=0):
+        self._name = name          # ctypes.CDLL exposes the same attribute
         self.name = name
         self.devices = devices
         self._funcs = {}
@@ -131,6 +132,20 @@ def test_falls_back_when_no_backend_sees_anything(monkeypatch, reload_hid):
     hid = reload_hid()
 
     assert hid._lib is not None
+
+
+def test_backend_name_reports_the_library_in_use(monkeypatch, reload_hid):
+    """Reported when no device is found, so it has to name something real."""
+    monkeypatch.setattr(ctypes.util, 'find_library', lambda name: None)
+
+    def fake_cdll(name, *a, **k):
+        return FakeLib(name, devices=0 if 'hidraw' in name else 1)
+
+    monkeypatch.setattr(ctypes, 'CDLL', fake_cdll)
+
+    hid = reload_hid()
+
+    assert 'libusb' in hid.backend_name()
 
 
 def test_error_names_the_packages_to_install(monkeypatch, reload_hid):
