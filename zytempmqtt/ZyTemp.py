@@ -148,7 +148,13 @@ class ZyTemp():
         if any(v is None for v in self.values.values()):
             return
 
-        self.m.publish(self.cfg.mqtt_topic, self.values, retain=True)
+        # Deliberately not retained. A reading means "as of now", and a
+        # retained one would be handed to any new subscriber as the current
+        # value however old it was - so a stopped service or an unplugged
+        # sensor would show up as a confident, wrong measurement. The
+        # discovery config above is retained because it is static metadata;
+        # this is not.
+        self.m.publish(self.cfg.mqtt_topic, self.values)
 
     def update(self, key, value):
         if self.values[key] == value:

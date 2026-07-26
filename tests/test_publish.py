@@ -38,6 +38,33 @@ def test_publish_reports_failure_while_disconnected(cfg):
     assert client.publish('zytemp-mqtt', {'CO2': 800}) is False
 
 
+def test_readings_are_not_retained(cfg, fake_hid):
+    """A reading means 'as of now'.
+
+    Retaining it would hand the last value to any new subscriber as the
+    current one, so a stopped service or an unplugged sensor would present
+    a confident, wrong measurement instead of nothing.
+    """
+    broker = MiniBroker().start()
+    cfg.mqtt_port = broker.port
+    client = MqttClient()
+    client.connect()
+    zt = ZyTemp(fake_hid, client)
+
+    try:
+        assert wait_until(lambda: client.connect_count == 1)
+        zt.update('CO2', 800)
+        zt.update('Temperature', 21.5)
+        assert wait_until(lambda: broker.topics(cfg.mqtt_topic))
+
+        for topic, _, retain in broker.published:
+            if topic == cfg.mqtt_topic:
+                assert retain is False, 'readings must not be retained'
+    finally:
+        client.disconnect()
+        broker.stop()
+
+
 def test_state_is_republished_after_a_reconnect(cfg, fake_hid):
     """update() only publishes on change, so a steady reading would otherwise
     leave the entity empty until it happened to move."""
