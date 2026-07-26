@@ -4,6 +4,7 @@ MQTT client, so a broker that is down or unreachable would otherwise stop
 readings entirely.
 """
 
+import logging
 import socket
 import threading
 import time
@@ -13,7 +14,7 @@ import pytest
 import zytempmqtt.mqtt as zm
 from zytempmqtt.mqtt import MqttClient
 
-from mini_broker import RefusingBroker
+from mini_broker import RefusingBroker, RejectingBroker
 from conftest import wait_until
 
 # Generous: the behaviour being guarded took seconds, so anything sub-second
@@ -32,13 +33,6 @@ def free_port():
     port = s.getsockname()[1]
     s.close()
     return port
-
-
-@pytest.fixture
-def fast_backoff(monkeypatch):
-    """Keep reconnect tests to seconds rather than minutes."""
-    monkeypatch.setattr(zm, 'RECONNECT_MIN_DELAY', 1, raising=False)
-    monkeypatch.setattr(zm, 'RECONNECT_MAX_DELAY', 2, raising=False)
 
 
 def test_connect_does_not_block_when_refused(cfg):
@@ -90,7 +84,7 @@ def test_publish_returns_promptly_while_disconnected(cfg):
         client.disconnect()
 
 
-def test_reconnects_itself_with_backoff(cfg, fast_backoff, monkeypatch):
+def test_reconnects_itself_with_backoff(cfg, monkeypatch):
     """Retry without the caller driving it, but do not hammer.
 
     Also pins requirement that one Client is reused rather than a fresh one
@@ -123,6 +117,51 @@ def test_reconnects_itself_with_backoff(cfg, fast_backoff, monkeypatch):
     finally:
         client.disconnect()
         broker.stop()
+
+
+def test_rejected_credentials_read_differently_from_unreachable(cfg, caplog):
+    """Being turned away by the broker is not the same problem as not
+    finding it, and the log has to make that obvious."""
+    broker = RejectingBroker().start()
+    cfg.mqtt_port = broker.port
+    client = MqttClient()
+
+    try:
+        with caplog.at_level(logging.WARNING, logger='mqtt'):
+            client.connect()
+            wait_until(lambda: any('refused' in r.getMessage()
+                                   for r in caplog.records), timeout=10.0)
+
+        messages = [r.getMessage() for r in caplog.records]
+        assert any('refused' in m for m in messages), (
+            f'no refusal reported, only: {messages}')
+        # The reason, not a bare number
+        assert any('password' in m.lower() or 'auth' in m.lower()
+                   for m in messages), (
+            f'refusal did not say why: {messages}')
+        assert client.connect_count == 0, 'a refused connection is not a connection'
+    finally:
+        client.disconnect()
+        broker.stop()
+
+
+def test_unreachable_broker_says_so(cfg, caplog):
+    cfg.mqtt_port = free_port()
+    client = MqttClient()
+
+    try:
+        with caplog.at_level(logging.WARNING, logger='mqtt'):
+            client.connect()
+            wait_until(lambda: any('reach' in r.getMessage()
+                                   for r in caplog.records), timeout=10.0)
+
+        messages = [r.getMessage() for r in caplog.records]
+        assert any('reach' in m for m in messages), (
+            f'an unreachable broker went unreported: {messages}')
+        assert not any('refused' in m for m in messages), (
+            'an unreachable broker must not look like a rejected login')
+    finally:
+        client.disconnect()
 
 
 def test_disconnect_is_prompt_and_idempotent(cfg):

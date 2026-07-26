@@ -138,6 +138,16 @@ class MiniBroker:
     saw_disconnect = False
 
 
+class RejectingBroker(MiniBroker):
+    """Answers CONNECT with 'bad user name or password'.
+
+    Reachable, but turns the client away - which is a different failure from
+    the broker being unreachable, and has to look different in the log.
+    """
+
+    CONNACK = b'\x20\x02\x00\x04'
+
+
 class RefusingBroker(MiniBroker):
     """Accepts the TCP connection then hangs up without a CONNACK.
 

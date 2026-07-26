@@ -48,8 +48,12 @@ class MqttClient:
             self.connect_count += 1
             l.log(log.INFO, f'connected to {self.cfg.mqtt_host}')
         else:
+            # Reaching the broker and being turned away is a different problem
+            # from not reaching it at all - usually a wrong username or
+            # password, which is worth saying rather than printing a number.
             l.log(log.ERROR,
-                  f'connection to {self.cfg.mqtt_host} failed: {rc}')
+                  f'{self.cfg.mqtt_host} refused the connection: '
+                  f'{mqtt.connack_string(rc)}')
 
     def on_disconnect(self, client, userdata, rc):
         l.log(log.WARN, f'disconnected from {self.cfg.mqtt_host}: {rc}')

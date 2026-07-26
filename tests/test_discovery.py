@@ -20,12 +20,18 @@ def test_discovery_is_republished_after_the_broker_restarts(cfg, fake_hid):
     client.connect()
     zt = ZyTemp(fake_hid, client)
 
+    # One config message per measurement. Wait for all of them rather than the
+    # first: they are separate publishes, so a check for "any" can run while
+    # the rest are still in flight.
+    expected = len(ZyTemp.MEASUREMENTS)
+
     try:
         assert wait_until(lambda: client.connect_count == 1)
-        assert wait_until(lambda: (zt.discovery(),
-                                   broker.topics('config'))[1], timeout=5.0)
-        first = list(broker.topics('config'))
-        assert first, 'nothing announced on the first connection'
+        assert wait_until(
+            lambda: (zt.discovery(),
+                     len(broker.topics('config')) >= expected)[1], timeout=5.0), (
+            'the entities were never announced on the first connection')
+        first = sorted(broker.topics('config'))
 
         port = broker.port
         broker.stop()
@@ -36,10 +42,11 @@ def test_discovery_is_republished_after_the_broker_restarts(cfg, fake_hid):
                 'client never reconnected after the broker came back')
             assert wait_until(
                 lambda: (zt.discovery(),
-                         restarted.topics('config'))[1], timeout=10.0), (
+                         len(restarted.topics('config')) >= expected)[1],
+                timeout=10.0), (
                 'discovery was not re-announced after the restart, so Home '
                 'Assistant has no config for the entities')
-            assert sorted(restarted.topics('config')) == sorted(first)
+            assert sorted(restarted.topics('config')) == first
         finally:
             restarted.stop()
     finally:
@@ -55,10 +62,13 @@ def test_discovery_config_is_retained(cfg, fake_hid):
     client.connect()
     zt = ZyTemp(fake_hid, client)
 
+    expected = len(ZyTemp.MEASUREMENTS)
+
     try:
         assert wait_until(lambda: client.connect_count == 1)
-        assert wait_until(lambda: (zt.discovery(),
-                                   broker.topics('config'))[1], timeout=5.0)
+        assert wait_until(
+            lambda: (zt.discovery(),
+                     len(broker.topics('config')) >= expected)[1], timeout=5.0)
         for topic, _, retain in broker.published:
             if topic.endswith('config'):
                 assert retain is True, f'{topic} was published without retain'
