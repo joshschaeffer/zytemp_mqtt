@@ -8,7 +8,6 @@ is what discards retained messages when the broker does not persist them.
 
 import socket
 import threading
-import time
 
 CONNECT, PUBLISH, SUBSCRIBE, PINGREQ, DISCONNECT = 1, 3, 8, 12, 14
 
@@ -137,34 +136,6 @@ class MiniBroker:
             pass
 
     saw_disconnect = False
-
-
-class SilentBroker(MiniBroker):
-    """Completes the handshake, then stops answering without hanging up.
-
-    The socket stays open, so nothing tells the client the connection is
-    dead - no FIN, no reset, just silence. This is what a vanished host or a
-    reshuffled container network looks like from the other end, and it is the
-    case a clean broker shutdown cannot reproduce: only an unanswered
-    keepalive ever reveals it.
-    """
-
-    def _handle(self, conn):
-        conn.settimeout(0.5)
-        try:
-            ptype, _ = self._read_packet(conn)
-            if ptype is not None and (ptype >> 4) == CONNECT:
-                conn.sendall(self.CONNACK)
-        except OSError:
-            pass
-
-        # Hold the socket open and ignore everything from here on
-        while self._running:
-            time.sleep(0.05)
-        try:
-            conn.close()
-        except OSError:
-            pass
 
 
 class RejectingBroker(MiniBroker):
