@@ -6,15 +6,42 @@ as the python-hidapi (hid) module so the rest of the code is unchanged.
 import ctypes
 import ctypes.util
 
-_lib = None
-for _name in ('hidapi-libusb', 'hidapi-hidraw', 'hidapi'):
-    _libname = ctypes.util.find_library(_name)
-    if _libname:
+# hidraw first: it needs no kernel driver detach, and it is the backend the
+# udev rule shipped with this package grants access to.
+_BACKENDS = ('hidapi-hidraw', 'hidapi-libusb', 'hidapi')
+
+# Asking the dynamic linker directly is what works everywhere. On Linux
+# ctypes.util.find_library() shells out to ldconfig, gcc or ld to resolve a
+# name, and a router has none of those - musl does not even ship a compatible
+# ldconfig - so it returns None there and we would never find an installed
+# library. dlopen() needs no external tooling, so try sonames first and treat
+# find_library() as a bonus for unusual install locations.
+_SONAMES = tuple(
+    f'lib{_name}.so{_suffix}'
+    for _suffix in ('.0', '')
+    for _name in _BACKENDS
+)
+
+
+def _load_library():
+    for soname in _SONAMES:
         try:
-            _lib = ctypes.CDLL(_libname)
-            break
+            return ctypes.CDLL(soname)
         except OSError:
             continue
+
+    for name in _BACKENDS:
+        found = ctypes.util.find_library(name)
+        if found:
+            try:
+                return ctypes.CDLL(found)
+            except OSError:
+                continue
+
+    return None
+
+
+_lib = _load_library()
 
 if _lib is None:
     raise ImportError(
