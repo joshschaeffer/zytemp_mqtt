@@ -17,7 +17,9 @@ for _name in ('hidapi-libusb', 'hidapi-hidraw', 'hidapi'):
             continue
 
 if _lib is None:
-    raise ImportError('Could not find hidapi shared library')
+    raise ImportError(
+        'Could not find hidapi shared library - install libhidapi-hidraw0 '
+        'or libhidapi-libusb0 (package name varies by distro)')
 
 _lib.hid_init()
 

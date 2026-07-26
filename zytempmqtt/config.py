@@ -28,15 +28,25 @@ class ConfigFile(object):
         if not os.path.isfile(self.cfg_file_path):
             self.cfg_file_path = '/etc/zytempmqtt/config.yaml'
 
+        cfg_dict = {}
         try:
             with open(self.cfg_file_path, 'r') as infile:
-                cfg_dict = yaml.safe_load(infile)
-            for k, v in ConfigFile.CONFIG_DEFAULTS.items():
-                setattr(self, k,
-                        cfg_dict[k] if k in cfg_dict else v)
+                # An empty config file parses to None
+                cfg_dict = yaml.safe_load(infile) or {}
 
         except OSError as e:
             log.log(log.WARN, e)
+        except yaml.YAMLError as e:
+            log.log(log.ERROR, f'{self.cfg_file_path}: {e}')
+
+        # Apply defaults regardless, so a missing or partial config file
+        # still yields a fully populated object
+        for k, v in ConfigFile.CONFIG_DEFAULTS.items():
+            setattr(self, k, cfg_dict.get(k, v))
+
+        if not self.mqtt_host:
+            log.log(log.ERROR,
+                    f'No mqtt_host configured in {self.cfg_file_path}')
 
     def __new__(cls):
         if cls._instance is None:

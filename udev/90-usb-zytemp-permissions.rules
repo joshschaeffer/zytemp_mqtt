@@ -1,2 +1,5 @@
 # Enable non-root access for Holtek USB-zyTemp devices
+# Covers both the libusb and hidraw hidapi backends, since either may be
+# installed depending on the distro.
 SUBSYSTEM == "usb", ATTRS{idVendor} == "04d9", ATTRS{idProduct} == "a052", MODE = "0666"
+SUBSYSTEM == "hidraw", ATTRS{idVendor} == "04d9", ATTRS{idProduct} == "a052", MODE = "0666"

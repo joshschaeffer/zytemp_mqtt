@@ -4,6 +4,13 @@ This is a MQTT interface for the Holtek USB-zyTemp chipset which is used in inex
 
 ## Installation
 
+* Install the `hidapi` system library (provides `libhidapi-hidraw` or
+  `libhidapi-libusb`, loaded at runtime via ctypes)
+
+  ```bash
+  sudo apt install libhidapi-hidraw0
+  ```
+
 * Clone the repository
 
   ```bash
