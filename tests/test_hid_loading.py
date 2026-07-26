@@ -43,10 +43,12 @@ class FakeStub:
 
     def __init__(self, result=None):
         self.result = result
+        self.calls = 0
         self.restype = None
         self.argtypes = []
 
     def __call__(self, *a, **k):
+        self.calls += 1
         return self.result() if callable(self.result) else self.result
 
 
@@ -132,6 +134,35 @@ def test_falls_back_when_no_backend_sees_anything(monkeypatch, reload_hid):
     hid = reload_hid()
 
     assert hid._lib is not None
+
+
+def test_rejected_backends_are_shut_down(monkeypatch, reload_hid):
+    """Probing has to initialise each candidate; only one may stay running.
+
+    The builds are separate copies of the same library over the same libusb
+    and udev, and leaving two live in one process is unstable - a segfault
+    turned up on a Pi doing exactly that when the sensor was unplugged.
+    """
+    monkeypatch.setattr(ctypes.util, 'find_library', lambda name: None)
+
+    built = {}
+
+    def fake_cdll(name, *a, **k):
+        lib = FakeLib(name, devices=0 if 'hidraw' in name else 1)
+        built[name] = lib
+        return lib
+
+    monkeypatch.setattr(ctypes, 'CDLL', fake_cdll)
+
+    hid = reload_hid()
+
+    assert 'libusb' in hid._lib.name, 'wrong backend chosen for this setup'
+
+    rejected = built['libhidapi-hidraw.so.0']
+    assert rejected is not hid._lib
+    assert rejected.hid_exit.calls >= 1, (
+        'the backend that saw nothing was left initialised')
+    assert hid._lib.hid_exit.calls == 0, 'the chosen backend was shut down'
 
 
 def test_backend_name_reports_the_library_in_use(monkeypatch, reload_hid):

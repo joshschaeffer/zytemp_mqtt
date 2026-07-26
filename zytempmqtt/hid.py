@@ -62,6 +62,8 @@ def _bind(lib):
         ctypes.c_void_p, ctypes.c_char_p, ctypes.c_size_t]
     lib.hid_close.restype = None
     lib.hid_close.argtypes = [ctypes.c_void_p]
+    lib.hid_exit.restype = ctypes.c_int
+    lib.hid_exit.argtypes = []
     lib.hid_init()
     return lib
 
@@ -107,18 +109,37 @@ def _load_library():
 
     Falls back to the first one that loaded, so that a machine with no HID
     devices attached still gets a usable module rather than an ImportError.
+
+    Only the chosen backend is left running. Probing means initialising each
+    candidate in turn, and the builds are separate copies of the same library
+    sitting on the same libusb and udev underneath - leaving two of them live
+    in one process is asking for trouble, particularly around device removal.
     """
-    fallback = None
+    chosen = None
+    rejected = []
+
     for lib in _candidate_libraries():
         try:
             _bind(lib)
         except AttributeError:
             continue            # not a hidapi library after all
-        if fallback is None:
-            fallback = lib
         if _sees_devices(lib):
-            return lib
-    return fallback
+            chosen = lib
+            break
+        rejected.append(lib)
+
+    if chosen is None and rejected:
+        # Nothing can see a device - no sensor attached, most likely. Keep the
+        # most preferred one so the module still works when it turns up.
+        chosen = rejected.pop(0)
+
+    for lib in rejected:
+        try:
+            lib.hid_exit()
+        except OSError:
+            pass
+
+    return chosen
 
 
 _lib = _load_library()

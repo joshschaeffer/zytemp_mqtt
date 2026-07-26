@@ -173,7 +173,12 @@ class ZyTemp():
             try:
                 r = self.h.read(8)
             except OSError as err:
+                # Close it here rather than leaving it to __del__. The handle
+                # refers to hardware that has just gone away, and holding it
+                # open until the object happens to be collected means calling
+                # into the library about a device that no longer exists.
                 l.log(log.ERROR, f'OS error: {err}')
+                self.h.close()
                 return
 
             if not r:
