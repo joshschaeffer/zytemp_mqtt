@@ -1,0 +1,159 @@
+"""
+Connecting must never hold up the caller. The sensor read loop calls into the
+MQTT client, so a broker that is down or unreachable would otherwise stop
+readings entirely.
+"""
+
+import socket
+import threading
+import time
+
+import pytest
+
+import zytempmqtt.mqtt as zm
+from zytempmqtt.mqtt import MqttClient
+
+from mini_broker import RefusingBroker
+from conftest import wait_until
+
+# Generous: the behaviour being guarded took seconds, so anything sub-second
+# is unambiguous even on a loaded CI runner.
+NON_BLOCKING = 0.25
+
+# RFC 5737 TEST-NET-1. Reserved for documentation and not routed, so a
+# connection attempt hangs rather than being refused.
+BLACKHOLE_HOST = '192.0.2.1'
+
+
+def free_port():
+    """A port number with nothing listening on it."""
+    s = socket.socket()
+    s.bind(('127.0.0.1', 0))
+    port = s.getsockname()[1]
+    s.close()
+    return port
+
+
+@pytest.fixture
+def fast_backoff(monkeypatch):
+    """Keep reconnect tests to seconds rather than minutes."""
+    monkeypatch.setattr(zm, 'RECONNECT_MIN_DELAY', 1, raising=False)
+    monkeypatch.setattr(zm, 'RECONNECT_MAX_DELAY', 2, raising=False)
+
+
+def test_connect_does_not_block_when_refused(cfg):
+    cfg.mqtt_port = free_port()
+    client = MqttClient()
+
+    t0 = time.time()
+    client.connect()
+    elapsed = time.time() - t0
+
+    try:
+        assert elapsed < NON_BLOCKING, (
+            f'connect() blocked for {elapsed:.2f}s against a closed port; '
+            f'this stalls the sensor read loop')
+    finally:
+        client.disconnect()
+
+
+def test_connect_does_not_block_when_host_unreachable(cfg):
+    cfg.mqtt_host = BLACKHOLE_HOST
+    cfg.mqtt_port = 1883
+    client = MqttClient()
+
+    t0 = time.time()
+    client.connect()
+    elapsed = time.time() - t0
+
+    try:
+        assert elapsed < NON_BLOCKING, (
+            f'connect() blocked for {elapsed:.2f}s against an unreachable '
+            f'host; this stalls the sensor read loop')
+    finally:
+        client.disconnect()
+
+
+def test_publish_returns_promptly_while_disconnected(cfg):
+    cfg.mqtt_port = free_port()
+    client = MqttClient()
+    client.connect()
+
+    try:
+        t0 = time.time()
+        ok = client.publish('zytemp-mqtt', {'CO2': 800})
+        elapsed = time.time() - t0
+
+        assert ok is False
+        assert elapsed < NON_BLOCKING
+    finally:
+        client.disconnect()
+
+
+def test_reconnects_itself_with_backoff(cfg, fast_backoff, monkeypatch):
+    """Retry without the caller driving it, but do not hammer.
+
+    Also pins requirement that one Client is reused rather than a fresh one
+    being built per attempt - that churn is what hurts on a small router.
+    """
+    broker = RefusingBroker().start()
+    cfg.mqtt_port = broker.port
+
+    created = []
+    real_client = zm.mqtt.Client
+
+    class CountingClient(real_client):
+        def __init__(self, *a, **k):
+            created.append(1)
+            super().__init__(*a, **k)
+
+    monkeypatch.setattr(zm.mqtt, 'Client', CountingClient)
+
+    client = MqttClient()
+    client.connect()
+    try:
+        # Nobody calls into the client during this window on purpose.
+        assert wait_until(lambda: broker.accepts >= 2, timeout=8.0), (
+            f'client did not retry on its own (accepts={broker.accepts}); '
+            f'reconnect depends on the caller pumping it')
+        assert broker.accepts <= 8, (
+            f'{broker.accepts} connection attempts in 8s - no backoff')
+        assert len(created) == 1, (
+            f'{len(created)} Client objects built; one should be reused')
+    finally:
+        client.disconnect()
+        broker.stop()
+
+
+def test_disconnect_is_prompt_and_idempotent(cfg):
+    """Must not join a network thread stuck in a name lookup or TCP connect."""
+    cfg.mqtt_host = BLACKHOLE_HOST
+    cfg.mqtt_port = 1883
+    client = MqttClient()
+    client.connect()
+
+    t0 = time.time()
+    client.disconnect()
+    elapsed = time.time() - t0
+
+    assert elapsed < 0.5, f'disconnect() took {elapsed:.2f}s'
+    client.disconnect()          # second call must be harmless
+
+
+def test_disconnect_stops_the_network_thread(cfg):
+    from mini_broker import MiniBroker
+
+    broker = MiniBroker().start()
+    cfg.mqtt_port = broker.port
+    client = MqttClient()
+    client.connect()
+
+    try:
+        assert wait_until(lambda: client.connect_count == 1, timeout=10.0)
+        before = threading.active_count()
+        client.disconnect()
+        assert wait_until(
+            lambda: threading.active_count() < before or client.client is None,
+            timeout=3.0)
+    finally:
+        broker.stop()
