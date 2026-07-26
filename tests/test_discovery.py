@@ -1,8 +1,14 @@
 """
-Home Assistant is normally restarted together with its MQTT broker. Unless the
-broker persists retained messages the discovery config is lost, so the entities
-have to be announced again or they stay unavailable - which is the bug this
-guards against.
+The bug this guards against needs two events, which is why it looked random.
+
+First the broker restarts, dropping every retained message unless it persists
+them - the Home Assistant discovery config with it. Nothing appears wrong: the
+client reconnects and readings carry on. Then, some time later, Home Assistant
+restarts, rebuilds its entities from retained discovery, finds none, and the
+sensors are unknown until the publisher itself is restarted.
+
+Announcing once per process is what makes that permanent, so the fix is to
+announce again on every new connection.
 """
 
 from zytempmqtt.mqtt import MqttClient

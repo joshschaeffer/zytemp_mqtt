@@ -2,8 +2,8 @@
 A minimal MQTT 3.1.1 broker, just capable enough to test client behaviour:
 CONNECT/CONNACK, PUBLISH, SUBSCRIBE/SUBACK, PINGREQ/PINGRESP and DISCONNECT.
 
-Stopping and starting one on the same port simulates the broker restarting,
-which is what Home Assistant does to its Mosquitto add-on.
+Stopping and starting one on the same port simulates a broker restart, which
+is what discards retained messages when the broker does not persist them.
 """
 
 import socket

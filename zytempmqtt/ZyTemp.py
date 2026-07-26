@@ -70,10 +70,14 @@ class ZyTemp():
     def discovery(self):
         """Announce ourselves again whenever a new connection is established.
 
-        The broker is usually restarted together with Home Assistant, and
-        unless it persists retained messages both the discovery config and the
-        last reading are lost - leaving the entities unavailable until they
-        are published again.
+        A broker restart takes every retained message with it unless the
+        broker persists them, the discovery config included. Announcing only
+        once per process leaves no trace of the problem: the client
+        reconnects, readings keep flowing, and everything looks healthy while
+        the broker holds no config at all. The damage only surfaces the next
+        time Home Assistant restarts and tries to rebuild its entities from
+        retained discovery - at which point the sensors are gone for good,
+        until this process happens to be restarted.
         """
         # Sample the counter once. It is incremented on paho's network thread,
         # so it can change while we are publishing; comparing and storing the
