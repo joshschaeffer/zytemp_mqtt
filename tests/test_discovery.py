@@ -79,6 +79,9 @@ class _ReconnectingDuringPublish:
         self.published = []
         self._bumped = False
 
+    def is_connected(self):
+        return True
+
     def publish(self, topic, pkt, retain=False):
         if not self._bumped:
             self._bumped = True

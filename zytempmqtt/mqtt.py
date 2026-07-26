@@ -34,6 +34,7 @@ class MqttClient:
             client = mqtt.Client(client_id=self.cfg.mqtt_client_id)
         client.on_connect = self.on_connect
         client.on_disconnect = self.on_disconnect
+        client.on_connect_fail = self.on_connect_fail
         client.username_pw_set(
             self.cfg.mqtt_username, self.cfg.mqtt_password)
         client.reconnect_delay_set(
@@ -52,6 +53,17 @@ class MqttClient:
 
     def on_disconnect(self, client, userdata, rc):
         l.log(log.WARN, f'disconnected from {self.cfg.mqtt_host}: {rc}')
+
+    def on_connect_fail(self, client, userdata):
+        # Nothing else reports these: the connection is established on paho's
+        # own thread, so a broker that cannot be resolved or reached would
+        # otherwise just retry in silence forever.
+        l.log(log.WARN,
+              f'could not reach {self.cfg.mqtt_host}:{self.cfg.mqtt_port} '
+              f'- retrying')
+
+    def is_connected(self):
+        return self.client is not None and self.client.is_connected()
 
     def connect(self):
         """Start connecting to the broker in the background.
@@ -105,7 +117,7 @@ class MqttClient:
             if isinstance(o, (list, tuple)):
                 return [round_floats(x) for x in o]
             return o
-        if self.client is not None and self.client.is_connected():
+        if self.is_connected():
             mi = self.client.publish(topic, json.dumps(
                 round_floats(pkt)), retain=retain)
             return (mi.rc == mqtt.MQTT_ERR_SUCCESS)

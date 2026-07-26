@@ -84,6 +84,12 @@ class ZyTemp():
         if self.discovered_connection == session:
             return
 
+        # Nothing can be announced while offline, and this runs once per
+        # reading - without this the journal fills with failure notices for
+        # as long as the broker is away.
+        if not self.m.is_connected():
+            return
+
         if not self._publish_discovery_config():
             l.log(
                 log.INFO, f'MQTT discovery to {self.cfg.mqtt_host} failed - retrying')
