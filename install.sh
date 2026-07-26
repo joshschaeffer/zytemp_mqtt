@@ -2,9 +2,19 @@
 
 set -eu
 
-# Add system user zytempmqtt
-
 SRVNAME="zytempmqtt"
+INSTALL_DIR="/opt/${SRVNAME}"
+CONFIG_DIR="/etc/${SRVNAME}"
+CONFIG_FILE="${CONFIG_DIR}/config.yaml"
+
+cd "$(dirname "$0")"
+
+if [ ! -d "${SRVNAME}" ]; then
+    echo "error: run this from a checkout - no ${SRVNAME}/ here" >&2
+    exit 1
+fi
+
+# Add system user zytempmqtt
 
 ID=$(id -u ${SRVNAME} 2>/dev/null || true)
 
@@ -36,21 +46,35 @@ else
     udevadm trigger
 fi
 
-# Create default config
+# Install the application. Copying it keeps the install free of pip, which
+# recent distros refuse to run against the system Python anyway, and of the
+# virtualenvs that would hide the distro's own paho-mqtt and PyYAML.
 
-mkdir -p /etc/zytempmqtt
-cat <<'EOF' > /etc/zytempmqtt/config.yaml
+mkdir -p "${INSTALL_DIR}"
+rm -rf "${INSTALL_DIR}/${SRVNAME}"
+cp -a "${SRVNAME}" "${INSTALL_DIR}/"
+echo "installed to ${INSTALL_DIR}"
+
+# Create default config, but never overwrite one that is already there
+
+mkdir -p "${CONFIG_DIR}"
+if [ -e "${CONFIG_FILE}" ]; then
+    echo "keeping existing ${CONFIG_FILE}"
+else
+    cat <<'EOF' > "${CONFIG_FILE}"
 mqtt_host: homeassistant.local
 mqtt_username: user
 mqtt_password: pass
 friendly_name: aircontrol-mini
 EOF
+    echo "wrote default ${CONFIG_FILE} - edit it before starting the service"
+fi
 
 # Add systemd service
 
 SERVICE_PATH=/lib/systemd/system/${SRVNAME}.service
 
-cat <<'EOF' > $SERVICE_PATH
+cat <<EOF > $SERVICE_PATH
 [Unit]
 Description="zytempmqtt service"
 Documentation=https://github.com/patrislav1/zytemp_mqtt
@@ -61,13 +85,21 @@ StartLimitInterval=10
 StartLimitBurst=3
 [Service]
 Type=simple
-User=zytempmqtt
-Group=zytempmqtt
+User=${SRVNAME}
+Group=${SRVNAME}
 Restart=always
 RestartSec=10
-ExecStart=/usr/bin/python3 -m zytempmqtt
+WorkingDirectory=${INSTALL_DIR}
+Environment=PYTHONPATH=${INSTALL_DIR}
+ExecStart=/usr/bin/python3 -m ${SRVNAME}
 [Install]
 WantedBy=multi-user.target
 EOF
 
 systemctl daemon-reload
+systemctl enable --now ${SRVNAME}
+
+echo
+echo "${SRVNAME} is enabled and running. Check it with:"
+echo "  systemctl status ${SRVNAME}"
+echo "  journalctl -u ${SRVNAME} -f"
