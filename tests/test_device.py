@@ -52,6 +52,40 @@ def test_device_that_cannot_be_opened_does_not_kill_the_service(monkeypatch):
     assert get_hiddev() is None       # must not raise
 
 
+def test_sensor_is_started_with_a_report_id(cfg, fake_hid):
+    """The prefixed form is the one the kernel's hidraw path accepts."""
+    from zytempmqtt.ZyTemp import ZyTemp
+
+    ZyTemp(fake_hid, _NullMqtt())
+
+    assert fake_hid.feature_reports, 'the sensor was never asked to start'
+    sent = fake_hid.feature_reports[0]
+    assert sent[:1] == b'\x00', f'no report id prefix: {sent!r}'
+    assert sent[1:] == b'\xc4\xc6\xc0\x92\x40\x23\xdc\x96'
+
+
+def test_falls_back_to_the_bare_key(cfg):
+    """libusb has always taken the unprefixed key; keep working there."""
+    from zytempmqtt.ZyTemp import ZyTemp
+    from conftest import FakeHid
+
+    hiddev = FakeHid(reject_report_id_0=True)
+    ZyTemp(hiddev, _NullMqtt())
+
+    assert hiddev.feature_reports == [b'\xc4\xc6\xc0\x92\x40\x23\xdc\x96'], (
+        'did not fall back when the prefixed form was refused')
+
+
+class _NullMqtt:
+    connect_count = 0
+
+    def is_connected(self):
+        return False
+
+    def publish(self, *a, **k):
+        return False
+
+
 def test_device_is_opened_when_available(monkeypatch):
     hid = sys.modules['zytempmqtt.hid']
     monkeypatch.setattr(hid, 'enumerate',

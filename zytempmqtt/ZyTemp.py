@@ -11,6 +11,12 @@ CO2_USB_PRD = 'USB-zyTemp'
 # Ignore first 5 measurements during self-calibration after power-up
 IGNORE_N_MEASUREMENTS = 5
 
+# The sensor reports every couple of seconds, so silence for this long means
+# something is wrong rather than merely quiet. Waiting rather than blocking
+# forever is what makes that difference visible at all.
+READ_TIMEOUT_MS = 5000
+SILENT_READS_BEFORE_GIVING_UP = 6
+
 l = log.getLogger('zytemp')
 
 
@@ -57,10 +63,33 @@ class ZyTemp():
         self._magic_table = _CO2MON_MAGIC_TABLE
         self._magic_table_int = list_to_longint(_CO2MON_MAGIC_TABLE)
 
-        if self.cfg.decrypt:
-            self.h.send_feature_report(self._magic_table)
-        else:
-            self.h.send_feature_report(b'\xc4\xc6\xc0\x92\x40\x23\xdc\x96')
+        self._start_sensor()
+
+    def _start_sensor(self):
+        """Ask the sensor to begin reporting.
+
+        The first byte of a feature report is the report id. hidraw goes
+        through the kernel, which checks it against the device's descriptor
+        and refuses an id that was never declared; libusb bypasses that check
+        entirely, which is why the bare key this project has always sent
+        works there and goes nowhere over hidraw. Prefer the correct form and
+        keep the old one as a fallback, because a sensor that is never asked
+        just stays silent - the hardest failure to recognise.
+        """
+        key = bytes(self._magic_table if self.cfg.decrypt
+                    else b'\xc4\xc6\xc0\x92\x40\x23\xdc\x96')
+
+        for payload, form in ((b'\x00' + key, 'report id 0'), (key, 'bare')):
+            try:
+                self.h.send_feature_report(payload)
+            except OSError:
+                continue
+            l.log(log.DEBUG, f'sensor started ({form})')
+            return
+
+        l.log(log.ERROR,
+              f'Could not start the sensor via {hid.backend_name()} - '
+              f'it will most likely report nothing')
 
     def __del__(self):
         self.h.close()
@@ -168,10 +197,12 @@ class ZyTemp():
         self.publish_state()
 
     def run(self):
+        silent_reads = 0
+
         while True:
             self.discovery()
             try:
-                r = self.h.read(8)
+                r = self.h.read(8, timeout_ms=READ_TIMEOUT_MS)
             except OSError as err:
                 # Close it here rather than leaving it to __del__. The handle
                 # refers to hardware that has just gone away, and holding it
@@ -182,9 +213,20 @@ class ZyTemp():
                 return
 
             if not r:
-                l.log(log.ERROR, f'Read error')
-                self.h.close()
-                return
+                silent_reads += 1
+                l.log(log.WARNING,
+                      f'No data from the sensor for '
+                      f'{silent_reads * READ_TIMEOUT_MS // 1000}s')
+                if silent_reads >= SILENT_READS_BEFORE_GIVING_UP:
+                    # Reopening costs little and re-sends the report that asks
+                    # the sensor to start, which is the likeliest thing to
+                    # have gone wrong.
+                    l.log(log.ERROR, 'Giving up on this handle and reopening')
+                    self.h.close()
+                    return
+                continue
+
+            silent_reads = 0
 
             if self.cfg.decrypt:
                 # Rearrange message and convert to long int

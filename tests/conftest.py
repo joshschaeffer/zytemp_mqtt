@@ -63,16 +63,24 @@ def cfg(monkeypatch):
 
 
 class FakeHid:
-    """Stands in for a hid device handle."""
+    """Stands in for a hid device handle.
 
-    def __init__(self):
+    `reject_report_id_0` mimics a backend that refuses the prefixed form, so
+    the fallback can be exercised.
+    """
+
+    def __init__(self, reject_report_id_0=False):
         self.feature_reports = []
+        self.reject_report_id_0 = reject_report_id_0
 
     def send_feature_report(self, data):
-        self.feature_reports.append(bytes(data))
+        data = bytes(data)
+        if self.reject_report_id_0 and data[:1] == b'\x00':
+            raise OSError('failed to send feature report')
+        self.feature_reports.append(data)
         return len(data)
 
-    def read(self, length):
+    def read(self, length, timeout_ms=None):
         return []
 
     def close(self):

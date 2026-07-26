@@ -60,6 +60,9 @@ def _bind(lib):
     lib.hid_read.restype = ctypes.c_int
     lib.hid_read.argtypes = [
         ctypes.c_void_p, ctypes.c_char_p, ctypes.c_size_t]
+    lib.hid_read_timeout.restype = ctypes.c_int
+    lib.hid_read_timeout.argtypes = [
+        ctypes.c_void_p, ctypes.c_char_p, ctypes.c_size_t, ctypes.c_int]
     lib.hid_close.restype = None
     lib.hid_close.argtypes = [ctypes.c_void_p]
     lib.hid_exit.restype = ctypes.c_int
@@ -192,11 +195,26 @@ class device:
 
     def send_feature_report(self, data):
         buf = bytes(data)
-        return _lib.hid_send_feature_report(self._dev, buf, len(buf))
+        n = _lib.hid_send_feature_report(self._dev, buf, len(buf))
+        if n < 0:
+            # Worth raising rather than returning: this is what tells the
+            # sensor to start reporting, and a device that was never told
+            # simply goes quiet, which is indistinguishable from a healthy
+            # one that has nothing to say.
+            raise OSError('failed to send feature report')
+        return n
 
-    def read(self, length):
+    def read(self, length, timeout_ms=None):
+        """Read a report. Returns an empty list if nothing arrived in time.
+
+        Without a timeout this blocks indefinitely, which hides the
+        difference between a sensor that is quiet and one that is broken.
+        """
         buf = ctypes.create_string_buffer(length)
-        n = _lib.hid_read(self._dev, buf, length)
+        if timeout_ms is None:
+            n = _lib.hid_read(self._dev, buf, length)
+        else:
+            n = _lib.hid_read_timeout(self._dev, buf, length, timeout_ms)
         if n < 0:
             raise OSError('HID read error')
         return list(buf.raw[:n])
