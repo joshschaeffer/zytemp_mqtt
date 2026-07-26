@@ -256,5 +256,13 @@ def get_hiddev():
     l.log(log.INFO, f'Using device at {p[0].decode("utf-8")} '
                     f'via {hid.backend_name()}')
     h = hid.device()
-    h.open_path(p[0])
+    try:
+        h.open_path(p[0])
+    except OSError as err:
+        # Unplugged between listing and opening, or listed but not readable
+        # by this user. Neither is worth dying for: the caller retries, and
+        # letting it out of here kills the service instead - permanently,
+        # once systemd's start limit is reached.
+        l.log(log.ERROR, f'Cannot open device: {err}')
+        return None
     return h
