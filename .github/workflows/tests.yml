@@ -6,13 +6,14 @@ on:
 
 jobs:
   test:
-    runs-on: ubuntu-latest
+    # Not ubuntu-latest: 26.04 has no Python 3.9, which RHEL 9 still ships
+    runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
       matrix:
-        # Distros ship paho-mqtt 1.x, PyPI installs 2.x. The client code has
+        # Older distros ship paho-mqtt 1.x, PyPI installs 2.x. The client code has
         # to work on both, and only running both keeps that honest.
-        python-version: ['3.9', '3.12']
+        python-version: ['3.9', '3.14']
         paho: ['paho-mqtt==1.6.1', 'paho-mqtt>=2,<3']
 
     steps:
