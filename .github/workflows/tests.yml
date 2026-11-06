@@ -35,3 +35,10 @@ jobs:
       # No broker, no sensor and no libhidapi needed - the suite stubs all three
       - name: Run tests
         run: python -m pytest -q
+
+  docker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # The tests stub hidapi; this checks the image's real one loads
+      - run: docker build -t zytempmqtt . && docker run --rm --entrypoint python3 zytempmqtt -c 'import zytempmqtt.cli'

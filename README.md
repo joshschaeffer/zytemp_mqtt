@@ -67,6 +67,16 @@ sudo rm -f /etc/udev/rules.d/90-usb-zytemp-permissions.rules
 sudo systemctl daemon-reload
 ```
 
+## Docker
+
+```bash
+docker build -t zytempmqtt .
+docker run -d --restart unless-stopped --device /dev/hidraw0 \
+  -v /etc/zytempmqtt/config.yaml:/etc/zytempmqtt/config.yaml:ro zytempmqtt
+```
+
+Without a `/dev/hidraw*` node, pass the sensor's `/dev/bus/usb/BBB/DDD` instead.
+
 ## Configuration
 
 The configuration file is read from `$HOME/.config/zytempmqtt/config.yaml` if
