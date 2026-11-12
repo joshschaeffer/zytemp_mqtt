@@ -80,7 +80,7 @@ def test_loads_without_find_library(monkeypatch, reload_hid):
 
     def fake_cdll(name, *a, **k):
         attempted.append(name)
-        if name == 'libhidapi-hidraw.so.0':
+        if name == 'libhidapi-libusb.so.0':
             return FakeLib(name)
         raise OSError(f'{name}: cannot open shared object file')
 
@@ -94,89 +94,95 @@ def test_loads_without_find_library(monkeypatch, reload_hid):
     assert attempted, 'no library was tried by soname'
 
 
-def test_prefers_hidraw_when_both_see_devices(monkeypatch, reload_hid):
-    """hidraw needs no kernel driver detach, so it wins the tie-break."""
-    monkeypatch.setattr(ctypes.util, 'find_library', lambda name: None)
-    monkeypatch.setattr(ctypes, 'CDLL',
-                        lambda name, *a, **k: FakeLib(name, devices=2))
-
-    hid = reload_hid()
-
-    assert 'hidraw' in hid._lib.name, (
-        f'loaded {hid._lib.name}; hidraw should win when both work')
-
-
-def test_skips_a_backend_that_sees_nothing(monkeypatch, reload_hid):
-    """The failure seen on a Pi: the kernel had no /dev/hidraw* at all, so the
-    hidraw build enumerated nothing while libusb found the sensor. Picking a
-    backend without checking left the service reporting 'No device found'
-    with the device plugged in."""
-    monkeypatch.setattr(ctypes.util, 'find_library', lambda name: None)
+def test_uses_find_library_when_sonames_fail(monkeypatch, reload_hid):
+    """An install outside the linker's default path can still be found."""
+    monkeypatch.setattr(ctypes.util, 'find_library',
+                        lambda name: '/opt/lib/libhidapi-libusb.so.0'
+                        if name == 'hidapi-libusb' else None)
 
     def fake_cdll(name, *a, **k):
-        return FakeLib(name, devices=0 if 'hidraw' in name else 3)
+        if name.startswith('/opt/lib/'):
+            return FakeLib(name)
+        raise OSError(f'{name}: cannot open shared object file')
 
     monkeypatch.setattr(ctypes, 'CDLL', fake_cdll)
 
     hid = reload_hid()
 
-    assert 'libusb' in hid._lib.name, (
-        f'loaded {hid._lib.name}, which cannot see any device; '
-        f'the backend that can should have been chosen')
+    assert hid._lib.name == '/opt/lib/libhidapi-libusb.so.0'
 
 
-def test_falls_back_when_no_backend_sees_anything(monkeypatch, reload_hid):
-    """No HID devices attached is not a reason to refuse to import."""
-    monkeypatch.setattr(ctypes.util, 'find_library', lambda name: None)
-    monkeypatch.setattr(ctypes, 'CDLL',
-                        lambda name, *a, **k: FakeLib(name, devices=0))
+def test_never_loads_hidraw(monkeypatch, reload_hid):
+    """The hidraw build lists devices from /sys and opens them from /dev.
 
-    hid = reload_hid()
-
-    assert hid._lib is not None
-
-
-def test_rejected_backends_are_shut_down(monkeypatch, reload_hid):
-    """Probing has to initialise each candidate; only one may stay running.
-
-    The builds are separate copies of the same library over the same libusb
-    and udev, and leaving two live in one process is unstable - a segfault
-    turned up on a Pi doing exactly that when the sensor was unplugged.
+    In a container those disagree - /sys is the host's, /dev is the
+    container's - so hidraw lists a sensor it can never open, and when it
+    was preferred it won over a libusb build that worked. Having it
+    installed must make no difference.
     """
-    monkeypatch.setattr(ctypes.util, 'find_library', lambda name: None)
-
-    built = {}
+    attempted = []
 
     def fake_cdll(name, *a, **k):
-        lib = FakeLib(name, devices=0 if 'hidraw' in name else 1)
-        built[name] = lib
-        return lib
+        attempted.append(name)
+        return FakeLib(name)
+
+    monkeypatch.setattr(ctypes.util, 'find_library',
+                        lambda name: f'lib{name}.so.0')
+    monkeypatch.setattr(ctypes, 'CDLL', fake_cdll)
+
+    hid = reload_hid()
+
+    assert 'libusb' in hid._lib.name
+    assert not [n for n in attempted if 'hidraw' in n], (
+        f'tried to load a hidraw build: {attempted}')
+
+
+def test_hidraw_alone_is_not_enough(monkeypatch, reload_hid):
+    """Only the libusb build is supported; finding hidraw alone is an error,
+    not a silent fallback to a backend that may list but not open."""
+    monkeypatch.setattr(ctypes.util, 'find_library', lambda name: None)
+
+    def fake_cdll(name, *a, **k):
+        if 'hidraw' in name:
+            return FakeLib(name)
+        raise OSError(f'{name}: cannot open shared object file')
+
+    monkeypatch.setattr(ctypes, 'CDLL', fake_cdll)
+
+    with pytest.raises(ImportError):
+        reload_hid()
+
+
+def test_skips_a_library_that_is_not_hidapi(monkeypatch, reload_hid):
+    """A file by the right name that lacks the hidapi symbols is passed over."""
+    monkeypatch.setattr(ctypes.util, 'find_library', lambda name: None)
+
+    class NotHidapi:
+        _name = 'libhidapi-libusb.so.0'
+
+        def __getattr__(self, item):
+            raise AttributeError(item)
+
+    def fake_cdll(name, *a, **k):
+        if name == 'libhidapi-libusb.so.0':
+            return NotHidapi()
+        return FakeLib(name)
 
     monkeypatch.setattr(ctypes, 'CDLL', fake_cdll)
 
     hid = reload_hid()
 
-    assert 'libusb' in hid._lib.name, 'wrong backend chosen for this setup'
-
-    rejected = built['libhidapi-hidraw.so.0']
-    assert rejected is not hid._lib
-    assert rejected.hid_exit.calls >= 1, (
-        'the backend that saw nothing was left initialised')
-    assert hid._lib.hid_exit.calls == 0, 'the chosen backend was shut down'
+    assert hid._lib.name == 'libhidapi-libusb.so'
 
 
 def test_backend_name_reports_the_library_in_use(monkeypatch, reload_hid):
     """Reported when no device is found, so it has to name something real."""
     monkeypatch.setattr(ctypes.util, 'find_library', lambda name: None)
-
-    def fake_cdll(name, *a, **k):
-        return FakeLib(name, devices=0 if 'hidraw' in name else 1)
-
-    monkeypatch.setattr(ctypes, 'CDLL', fake_cdll)
+    monkeypatch.setattr(ctypes, 'CDLL', lambda name, *a, **k: FakeLib(name))
 
     hid = reload_hid()
 
-    assert 'libusb' in hid.backend_name()
+    assert hid.backend_name() == 'libhidapi-libusb.so.0'
 
 
 def test_error_names_the_packages_to_install(monkeypatch, reload_hid):
@@ -189,4 +195,4 @@ def test_error_names_the_packages_to_install(monkeypatch, reload_hid):
 
     with pytest.raises(ImportError) as excinfo:
         reload_hid()
-    assert 'hidapi' in str(excinfo.value).lower()
+    assert 'libhidapi-libusb0' in str(excinfo.value)

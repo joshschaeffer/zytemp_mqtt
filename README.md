@@ -9,13 +9,13 @@ to run on. Every dependency is already packaged by the distro, and the
 application itself is plain Python that gets copied into place.
 
 * Install the dependencies. `hidapi` is a C library, loaded at runtime via
-  ctypes.
+  ctypes. Only its libusb build is used; the hidraw build is not needed.
 
   ```bash
-  sudo apt install python3-paho-mqtt python3-yaml libhidapi-hidraw0
+  sudo apt install python3-paho-mqtt python3-yaml libhidapi-libusb0
   ```
 
-  On OpenWrt: `opkg install python3-paho-mqtt python3-yaml hidapi kmod-usb-hid`
+  On OpenWrt: `opkg install python3-paho-mqtt python3-yaml hidapi`
 
 * Clone the repository and change into it - the install script works relative
   to its own directory.

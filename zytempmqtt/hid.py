@@ -24,14 +24,16 @@ _DeviceInfo._fields_ = [
     ('next',                ctypes.POINTER(_DeviceInfo)),
 ]
 
-# hidapi comes in two flavours. hidraw talks to /dev/hidraw*, libusb talks to
-# the USB device directly. Which one works is a property of the machine, not
-# something worth guessing at: a kernel built without hidraw, or one where
-# nothing binds the device to usbhid, has no /dev/hidraw* at all and the
-# hidraw build then enumerates nothing while libusb is perfectly happy.
-# hidraw is listed first only as a tie-break, because it needs no kernel
-# driver detach when both can see the device.
-_BACKENDS = ('hidapi-hidraw', 'hidapi-libusb', 'hidapi')
+# Only the libusb build of hidapi is used. It talks to the USB device through
+# /dev/bus/usb, which is there on every machine this has run on: a Pi, a
+# RouterOS container and an Incus container. The hidraw build needs the kernel
+# to have bound the sensor to usbhid and created /dev/hidraw*, and it lists
+# devices from /sys while opening them from /dev - so in a container, which
+# sees the host's /sys but only its own /dev, it lists a sensor it can never
+# open. It also never worked where libusb did not. This is also what the
+# project used originally: the hidapi pip package builds its `hid` module
+# against libusb on Linux.
+_BACKEND = 'hidapi-libusb'
 
 # Asking the dynamic linker directly is what works everywhere. On Linux
 # ctypes.util.find_library() shells out to ldconfig, gcc or ld to resolve a
@@ -39,11 +41,7 @@ _BACKENDS = ('hidapi-hidraw', 'hidapi-libusb', 'hidapi')
 # ldconfig - so it returns None there and we would never find an installed
 # library. dlopen() needs no external tooling, so try sonames first and treat
 # find_library() as a bonus for unusual install locations.
-_SONAMES = tuple(
-    f'lib{_name}.so{_suffix}'
-    for _suffix in ('.0', '')
-    for _name in _BACKENDS
-)
+_SONAMES = (f'lib{_BACKEND}.so.0', f'lib{_BACKEND}.so')
 
 
 def _bind(lib):
@@ -71,86 +69,34 @@ def _bind(lib):
     return lib
 
 
-def _candidate_libraries():
-    """Every hidapi build we can load, most preferred first."""
-    seen = set()
-
-    def _try(name):
-        try:
-            lib = ctypes.CDLL(name)
-        except OSError:
-            return None
-        key = getattr(lib, '_name', name)
-        if key in seen:
-            return None
-        seen.add(key)
-        return lib
-
-    for soname in _SONAMES:
-        lib = _try(soname)
-        if lib is not None:
-            yield lib
-
-    for name in _BACKENDS:
-        found = ctypes.util.find_library(name)
-        if found:
-            lib = _try(found)
-            if lib is not None:
-                yield lib
-
-
-def _sees_devices(lib):
-    devs = lib.hid_enumerate(0, 0)
-    found = bool(devs)
+def _candidate_names():
+    """Names to hand to dlopen(), sonames first."""
+    yield from _SONAMES
+    found = ctypes.util.find_library(_BACKEND)
     if found:
-        lib.hid_free_enumeration(devs)
-    return found
+        yield found
 
 
 def _load_library():
-    """Pick a backend that can actually see the hardware.
-
-    Falls back to the first one that loaded, so that a machine with no HID
-    devices attached still gets a usable module rather than an ImportError.
-
-    Only the chosen backend is left running. Probing means initialising each
-    candidate in turn, and the builds are separate copies of the same library
-    sitting on the same libusb and udev underneath - leaving two of them live
-    in one process is asking for trouble, particularly around device removal.
-    """
-    chosen = None
-    rejected = []
-
-    for lib in _candidate_libraries():
+    """Load and initialise the libusb build of hidapi, or return None."""
+    for name in _candidate_names():
         try:
-            _bind(lib)
+            lib = ctypes.CDLL(name)
+        except OSError:
+            continue
+        try:
+            return _bind(lib)
         except AttributeError:
             continue            # not a hidapi library after all
-        if _sees_devices(lib):
-            chosen = lib
-            break
-        rejected.append(lib)
-
-    if chosen is None and rejected:
-        # Nothing can see a device - no sensor attached, most likely. Keep the
-        # most preferred one so the module still works when it turns up.
-        chosen = rejected.pop(0)
-
-    for lib in rejected:
-        try:
-            lib.hid_exit()
-        except OSError:
-            pass
-
-    return chosen
+    return None
 
 
 _lib = _load_library()
 
 if _lib is None:
     raise ImportError(
-        'Could not find hidapi shared library - install libhidapi-hidraw0 '
-        'or libhidapi-libusb0 (package name varies by distro)')
+        'Could not find the libusb build of hidapi (libhidapi-libusb.so) - '
+        'install libhidapi-libusb0 on Debian/Ubuntu, hidapi on OpenWrt')
 
 
 def backend_name():
